@@ -263,6 +263,22 @@ details.fold[open] summary { margin-bottom: 0.5rem; }
 .peek-row:first-child { border-top: 0; }
 .grp { font-size: 0.8125rem; color: var(--muted); }
 
+/* Word book (one card at a time, < >) */
+.bk-top { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; font-size: 0.8125rem; color: var(--muted); }
+.bk-card { border: 1px solid var(--line); background: var(--surface); border-radius: 14px; padding: 1.25rem 1rem; text-align: center; min-height: 13.5rem; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem; touch-action: pan-y; }
+.bk-card .tiles { justify-content: center; }
+.bk-en { font: 700 2.25rem/1.2 var(--f-word); overflow-wrap: anywhere; }
+.bk-mean { font-size: 1.125rem; }
+.bk-st { font-size: 0.8125rem; color: var(--muted); }
+.bk-act { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.75rem; }
+.bk-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.6rem; }
+.bk-nav .btn { min-height: 52px; font-size: 1rem; }
+button.chip { border: 0; cursor: pointer; }
+.chip.no { background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
+.chip.cur { background: var(--accent); color: var(--accent-ink); }
+.bk-sib { margin-top: 0.9rem; }
+.bk-sib .grp { margin: 0; }
+
 /* Toast */
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%);
@@ -297,7 +313,7 @@ details.fold[open] summary { margin-bottom: 0.5rem; }
     <div class="streak" aria-label="連続学習日数"><b id="streakNum">0</b>日連続</div>
     <nav class="tabs" id="tabs" role="tablist" aria-label="メニュー">
       <button role="tab" data-tab="today" aria-selected="true">今日</button>
-      <button role="tab" data-tab="words" aria-selected="false">単語</button>
+      <button role="tab" data-tab="words" aria-selected="false">単語帳</button>
       <button role="tab" data-tab="review" aria-selected="false">復習</button>
       <button role="tab" data-tab="test" aria-selected="false">テスト</button>
       <button role="tab" data-tab="record" aria-selected="false">記録</button>
@@ -354,6 +370,16 @@ details.fold[open] summary { margin-bottom: 0.5rem; }
 
     <!-- WORDS -->
     <section id="tab-words" role="tabpanel" hidden>
+      <div class="block">
+        <h2>単語帳<span class="aside" id="bookCount"></span></h2>
+        <div class="seg-group" id="bookFilter" role="group" aria-label="表示する単語">
+          <button data-f="new" aria-pressed="true">未登録</button>
+          <button data-f="all" aria-pressed="false">すべて</button>
+          <button data-f="have" aria-pressed="false">登録済み</button>
+        </div>
+        <div id="bookBody" class="mt-m"></div>
+      </div>
+
       <div class="block">
         <h2>単語庫<span class="aside" id="bankCount"></span></h2>
         <div class="bank-bar" aria-hidden="true"><i id="bankBarFill"></i></div>
@@ -882,6 +908,115 @@ arm($('#btnBankRestore'), 'もう一度押すと、外した単語をすべて�
   data.bank.skip = []; save(); renderAll(); toast('外した単語を戻しました');
 });
 
+/* ---------- Word book: one card at a time, move with < > or swipe ---------- */
+var bk = { f: 'new', i: 0, n: 0 };
+function bookList() {
+  var inWords = {};
+  data.words.forEach(function (w) { inWords[bkey(w.en)] = w; });
+  var skip = {}; data.bank.skip.forEach(function (k) { skip[k] = 1; });
+  var seen = {}, out = [];
+  BANK.forEach(function (b) {
+    var k = bkey(b.en); seen[k] = 1;
+    out.push({ en: b.en, meaning: b.meaning, parts: b.parts, group: b.group, st: inWords[k] ? 'have' : (skip[k] ? 'skip' : 'new'), w: inWords[k] || null });
+  });
+  data.words.forEach(function (w) {
+    if (!seen[bkey(w.en)]) out.push({ en: w.en, meaning: w.meaning, parts: w.parts, group: '自分で登録した単語', st: 'have', w: w });
+  });
+  return out;
+}
+function bookMove(d) {
+  bk.i = Math.max(0, Math.min(bk.n - 1, bk.i + d));
+  renderBook();
+}
+function bookRegister(it) {
+  if (it.w) return;
+  var t = todayStr(), k = bkey(it.en);
+  data.words.unshift({ id: uid(), en: it.en, meaning: it.meaning, parts: it.parts, date: t, box: 0, due: t });
+  if (data.bank.done.indexOf(k) < 0) data.bank.done.push(k);
+  data.bank.skip = data.bank.skip.filter(function (x) { return x !== k; });
+  var td = data.bank.today;
+  data.bank.today = td.d === t ? { d: t, n: td.n + 1 } : { d: t, n: 1 };
+  if (bk.f === 'all') bk.i++;
+  toast('「' + it.en + '」を登録しました');
+  afterAdd();
+}
+function startEdit(w) {
+  editingId = w.id; $('#inEn').value = w.en; $('#inMean').value = w.meaning; $('#inParts').value = w.parts;
+  $('#formTitle').textContent = '単語を編集'; $('#btnSaveWord').textContent = '更新'; $('#btnCancelEdit').hidden = false;
+  $('#inEn').focus(); $('#inEn').scrollIntoView({ block: 'center' });
+}
+function renderBook() {
+  var all = bookList(), cnt = { all: all.length, 'new': 0, have: 0 };
+  all.forEach(function (x) { if (x.st === 'new') cnt['new']++; else if (x.st === 'have') cnt.have++; });
+  var names = { 'new': '未登録', all: 'すべて', have: '登録済み' };
+  Array.prototype.forEach.call(document.querySelectorAll('#bookFilter button'), function (b) {
+    b.setAttribute('aria-pressed', String(b.dataset.f === bk.f)); b.textContent = names[b.dataset.f] + ' ' + cnt[b.dataset.f];
+  });
+  $('#bookCount').textContent = '登録 ' + cnt.have + ' / ' + all.length + '語';
+  var list = all.filter(function (x) { return bk.f === 'all' || x.st === bk.f; });
+  bk.n = list.length;
+  if (bk.i >= list.length) bk.i = list.length - 1;
+  if (bk.i < 0) bk.i = 0;
+  var box = $('#bookBody'); clear(box);
+  if (!list.length) {
+    add(box, h('p', { class: 'muted' }, bk.f === 'new' ? '未登録の単語はありません。すべて登録済みか、外した単語です。' : '該当する単語がありません。'));
+    return;
+  }
+  var it = list[bk.i], t = todayStr();
+  var stText = it.st === 'have' ? '登録済み　Lv.' + it.w.box + '　次の復習：' + (it.w.due <= t ? '今日' : fmtJP(it.w.due)) : (it.st === 'skip' ? '外した単語です' : '未登録');
+  add(box, h('div', { class: 'bk-top' }, h('span', null, (bk.i + 1) + ' / ' + list.length), h('span', null, '左右にスワイプでも移動できます')));
+  add(box, h('div', { class: 'bk-card', 'aria-live': 'polite' },
+    h('div', { class: 'grp' }, it.group),
+    h('div', { class: 'bk-en', lang: 'en' }, it.en),
+    h('div', { class: 'bk-mean' }, it.meaning),
+    it.parts ? tiles(it, 'mid') : null,
+    h('div', { class: 'bk-st' }, stText)));
+  var act = h('div', { class: 'bk-act' });
+  if (it.st === 'new') {
+    add(act, h('button', { class: 'btn primary', type: 'button', onclick: function () { bookRegister(it); } }, '登録する'));
+    add(act, h('button', { class: 'btn', type: 'button', onclick: function () { if (bk.f === 'all') bk.i++; skipWord(it); } }, '知ってる（外す）'));
+  } else if (it.st === 'skip') {
+    add(act, h('button', { class: 'btn', type: 'button', onclick: function () {
+      var k = bkey(it.en); data.bank.skip = data.bank.skip.filter(function (x) { return x !== k; }); save(); renderAll(); toast('単語庫に戻しました');
+    } }, '単語庫に戻す'));
+  } else {
+    add(act, h('button', { class: 'btn', type: 'button', onclick: function () { startEdit(it.w); } }, '編集'));
+  }
+  add(box, act);
+  add(box, h('div', { class: 'bk-nav' },
+    h('button', { class: 'btn', type: 'button', disabled: bk.i <= 0, 'aria-label': '前の単語', onclick: function () { bookMove(-1); } }, '‹ 前へ'),
+    h('button', { class: 'btn', type: 'button', disabled: bk.i >= list.length - 1, 'aria-label': '次の単語', onclick: function () { bookMove(1); } }, '次へ ›')));
+  var sibs = all.filter(function (x) { return x.group === it.group; });
+  if (sibs.length > 1) {
+    add(box, h('div', { class: 'bk-sib' }, h('p', { class: 'grp' }, '同じ語幹の単語（タップで移動）'),
+      h('div', { class: 'chips' }, sibs.map(function (x) {
+        return h('button', { type: 'button', lang: 'en', class: 'chip' + (x.en === it.en ? ' cur' : (x.st === 'have' ? '' : ' no')),
+          onclick: function () {
+            bk.f = 'all';
+            var full = bookList(), j = 0; for (var q = 0; q < full.length; q++) if (full[q].en === x.en) { j = q; break; }
+            bk.i = j; renderBook();
+          } }, x.en);
+      }))));
+  }
+}
+$('#bookFilter').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return;
+  bk.f = b.dataset.f; bk.i = 0; renderBook();
+});
+(function () {
+  var sx = null, body = $('#bookBody');
+  body.addEventListener('touchstart', function (e) { var t = e.changedTouches[0]; sx = { x: t.clientX, y: t.clientY }; }, { passive: true });
+  body.addEventListener('touchend', function (e) {
+    if (!sx) return; var t = e.changedTouches[0], dx = t.clientX - sx.x, dy = t.clientY - sx.y; sx = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) bookMove(dx < 0 ? 1 : -1);
+  }, { passive: true });
+})();
+document.addEventListener('keydown', function (e) {
+  if (currentTab !== 'words') return;
+  var tg = e.target.tagName; if (tg === 'INPUT' || tg === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight') bookMove(1); else if (e.key === 'ArrowLeft') bookMove(-1);
+});
+
 /* ---------- Words ---------- */
 var editingId = null;
 function resetWordForm() {
@@ -1238,7 +1373,7 @@ arm($('#btnReset'), 'もう一度押すと、すべて削除します', function
 
 /* ---------- render all ---------- */
 function renderAll() {
-  renderHeader(); renderToday(); renderBank(); renderWords();
+  renderHeader(); renderToday(); renderBank(); renderBook(); renderWords();
   if (rv.phase !== 'run') renderReview(); else if (currentTab === 'review') renderReview();
   if (ts.phase !== 'run') renderTest();
   if (currentTab === 'record') renderRecord();
