@@ -254,6 +254,15 @@ details.fold[open] summary { margin-bottom: 0.5rem; }
 .phase .bar i { display: block; height: 100%; background: var(--accent); }
 .phase.done .bar i { background: var(--good); }
 
+/* Word bank */
+.bank-bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 0.25rem 0 0.4rem; }
+.bank-bar i { display: block; height: 100%; background: var(--accent); }
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.4rem 0 0.9rem; }
+.chip { font: 600 0.9375rem var(--f-word); padding: 0.1rem 0.65rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
+.peek-row { display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 0.5rem; padding: 0.7rem 0; border-top: 1px solid var(--line); }
+.peek-row:first-child { border-top: 0; }
+.grp { font-size: 0.8125rem; color: var(--muted); }
+
 /* Toast */
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%);
@@ -302,6 +311,8 @@ details.fold[open] summary { margin-bottom: 0.5rem; }
     <section id="tab-today" role="tabpanel">
       <div class="hero block" id="hero"></div>
 
+      <div class="block" id="bankToday"></div>
+
       <div class="block">
         <h2>今日のやること<span class="aside" id="taskCount">0 / 5</span></h2>
         <ul class="tasks" id="tasks"></ul>
@@ -343,6 +354,27 @@ details.fold[open] summary { margin-bottom: 0.5rem; }
 
     <!-- WORDS -->
     <section id="tab-words" role="tabpanel" hidden>
+      <div class="block">
+        <h2>単語庫<span class="aside" id="bankCount"></span></h2>
+        <div class="bank-bar" aria-hidden="true"><i id="bankBarFill"></i></div>
+        <p class="small muted flush" id="bankNote"></p>
+        <div class="field mt-m">
+          <span>1日に追加する語数</span>
+          <div class="seg-group" id="perDaySeg" role="group" aria-label="1日に追加する語数">
+            <button data-n="5" aria-pressed="false">5語</button>
+            <button data-n="10" aria-pressed="true">10語</button>
+            <button data-n="15" aria-pressed="false">15語</button>
+            <button data-n="20" aria-pressed="false">20語</button>
+          </div>
+        </div>
+        <details class="fold" id="bankPeek">
+          <summary>次に出る単語を確認（知っている単語を外す）</summary>
+          <p class="small muted flush-top">すでに知っている単語は「知ってる」で外すと、単語庫から出なくなります。</p>
+          <div id="bankPeekList"></div>
+        </details>
+        <div class="row"><button class="btn quiet" id="btnBankRestore" type="button">外した単語を戻す</button></div>
+      </div>
+
       <div class="block">
         <h2 id="formTitle">単語を登録</h2>
         <form id="wordForm" autocomplete="off">
@@ -504,7 +536,7 @@ var storageOK = true;
 function normalize(d) {
   d = d && typeof d === 'object' ? d : {};
   var today = todayStr();
-  var o = { v: 2, startDate: isDate(d.startDate) ? d.startDate : today, logs: {}, secs: {}, notes: {}, words: [], tests: [], settings: { timerMin: 25, theme: 'auto' } };
+  var o = { v: 2, startDate: isDate(d.startDate) ? d.startDate : today, logs: {}, secs: {}, notes: {}, words: [], tests: [], settings: { timerMin: 25, theme: 'auto' }, bank: { perDay: 10, skip: [], done: [], today: { d: '', n: 0 } } };
   if (d.logs && typeof d.logs === 'object') Object.keys(d.logs).forEach(function (k) {
     if (!isDate(k) || !Array.isArray(d.logs[k])) return;
     var ids = d.logs[k].filter(function (x, i, a) { return TASK_IDS.indexOf(x) >= 0 && a.indexOf(x) === i; });
@@ -532,6 +564,13 @@ function normalize(d) {
   if (d.settings) {
     if (PRESETS.indexOf(d.settings.timerMin) >= 0) o.settings.timerMin = d.settings.timerMin;
     if (['auto', 'light', 'dark'].indexOf(d.settings.theme) >= 0) o.settings.theme = d.settings.theme;
+  }
+  if (d.bank && typeof d.bank === 'object') {
+    if ([5, 10, 15, 20].indexOf(d.bank.perDay) >= 0) o.bank.perDay = d.bank.perDay;
+    ['skip', 'done'].forEach(function (k) {
+      if (Array.isArray(d.bank[k])) o.bank[k] = d.bank[k].filter(function (x) { return typeof x === 'string' && x; }).slice(0, 5000);
+    });
+    if (d.bank.today && isDate(d.bank.today.d) && isFinite(d.bank.today.n)) o.bank.today = { d: d.bank.today.d, n: d.bank.today.n | 0 };
   }
   return o;
 }
@@ -649,12 +688,12 @@ function renderToday() {
   else { w = { en: 'predict', meaning: '予測する', parts: 'pre=前 + dict=言う' }; demo = true; }
   add(hero, tiles(w, 'big'));
   add(hero, h('p', { class: 'hero-word' }, h('span', { lang: 'en' }, w.en), h('span', { class: 'hero-mean' }, w.meaning)));
-  if (demo) add(hero, h('p', { class: 'muted small', style: 'margin:-0.4rem 0 1rem' }, '単語は語幹（パーツ）に分けると、意味が見えてきます。まず1語登録してみましょう。'));
+  if (demo) add(hero, h('p', { class: 'muted small', style: 'margin:-0.4rem 0 1rem' }, '単語は語幹（パーツ）に分けると、意味が見えてきます。下の「今日の新しい単語」から始められます。'));
   var due = dueWords().length, row = h('div', { class: 'row' });
-  if (!data.words.length) add(row, h('button', { class: 'btn primary', type: 'button', onclick: function () { showTab('words'); } }, '単語を登録する'));
+  if (!data.words.length) { if (!bankCounts().todo) add(row, h('button', { class: 'btn primary', type: 'button', onclick: function () { showTab('words'); } }, '単語を登録する')); }
   else if (due > 0) add(row, h('button', { class: 'btn primary', type: 'button', onclick: function () { showTab('review'); startReview(false); } }, '復習する（' + due + '語）'));
   else add(row, h('span', { class: 'muted' }, '今日の復習は完了です。'), h('button', { class: 'btn', type: 'button', onclick: function () { showTab('review'); startReview(true); } }, '全単語を練習する'));
-  add(hero, row);
+  if (row.childNodes.length) add(hero, row);
 
   var done = data.logs[t] || [];
   var addedToday = data.words.filter(function (x) { return x.date === t; }).length;
@@ -746,6 +785,103 @@ $('#presets').addEventListener('click', function (e) {
   data.settings.timerMin = +b.dataset.min; timer.total = timer.remaining = data.settings.timerMin * 60; save(); renderTimer();
 });
 
+/* ---------- Word bank (250 words grouped by root) ---------- */
+var BANK_RAW = "# dict=言う\npredict | 予測する | pre=前 + dict=言う\ndictate | 書き取らせる、命令する | dict=言う + ate=する\ncontradict | 矛盾する | contra=反対 + dict=言う\nverdict | 評決 | ver=真実 + dict=言う\nindicate | 示す | in=中に + dic=示す + ate=する\n# spect=見る\ninspect | 検査する | in=中 + spect=見る\nrespect | 尊敬する | re=再び + spect=見る\nexpect | 予期する、期待する | ex=外 + spect=見る\nprospect | 見込み | pro=前へ + spect=見る\nsuspect | 疑う | sus=下から + spect=見る\n# port=運ぶ\nimport | 輸入する | im=中へ + port=運ぶ\nexport | 輸出する | ex=外へ + port=運ぶ\ntransport | 輸送する | trans=横切って + port=運ぶ\nsupport | 支える | sup=下から + port=運ぶ\nportable | 持ち運べる | port=運ぶ + able=できる\n# struct=築く\nconstruct | 建設する | con=共に + struct=築く\nstructure | 構造 | struct=築く + ure=もの\ninstruct | 指導する | in=中に + struct=築く\nobstruct | 妨げる | ob=向かって + struct=築く\ninfrastructure | 基盤、インフラ | infra=下の + struct=築く + ure=もの\n# ject=投げる\nproject | 計画、計画する | pro=前へ + ject=投げる\nreject | 拒否する | re=戻す + ject=投げる\ninject | 注入する | in=中へ + ject=投げる\nobject | 反対する、物 | ob=向かって + ject=投げる\nsubject | 主題 | sub=下に + ject=投げる\n# press=押す\nexpress | 表現する | ex=外へ + press=押す\nimpress | 感銘を与える | im=中へ + press=押す\ncompress | 圧縮する | com=共に + press=押す\ndepress | 落ち込ませる | de=下へ + press=押す\nsuppress | 抑える | sup=下から + press=押す\n# duc/duct=導く\nproduce | 生産する | pro=前へ + duce=導く\nproduct | 製品 | pro=前へ + duct=導く\nreduce | 減らす | re=戻す + duce=導く\nintroduce | 紹介する | intro=中へ + duce=導く\nconduct | 行う、指揮する | con=共に + duct=導く\neducate | 教育する | e=外へ + duc=導く + ate=する\n# cept/ceive=つかむ\nreceive | 受け取る | re=戻して + ceive=つかむ\naccept | 受け入れる | ac=〜へ + cept=つかむ\nexcept | 〜を除いて | ex=外へ + cept=つかむ\nconcept | 概念 | con=共に + cept=つかむ\nperceive | 知覚する、気づく | per=完全に + ceive=つかむ\n# tain=保つ\ncontain | 含む | con=共に + tain=保つ\nmaintain | 維持する | main=手で + tain=保つ\nobtain | 手に入れる | ob=向かって + tain=保つ\nretain | 保持する | re=後ろに + tain=保つ\nsustain | 支える、持続させる | sus=下から + tain=保つ\n# mit=送る\nsubmit | 提出する | sub=下に + mit=送る\npermit | 許可する | per=通して + mit=送る\ntransmit | 伝える、送信する | trans=横切って + mit=送る\nadmit | 認める | ad=〜へ + mit=送る\ncommit | 約束する、犯す | com=共に + mit=送る\nmission | 任務、使命 | miss=送る + ion=こと\ndismiss | 解雇する、退ける | dis=離れて + miss=送る\n# vert=回る\nconvert | 変換する | con=共に + vert=回る\nreverse | 逆にする | re=後ろに + verse=回る\ndivert | そらす | di=別々に + vert=回る\nadvertise | 宣伝する | ad=〜へ + vert=回る + ise=する\nuniverse | 宇宙 | uni=1つ + verse=回る\n# pose=置く\npropose | 提案する | pro=前へ + pose=置く\nexpose | さらす | ex=外に + pose=置く\nimpose | 課す | im=上に + pose=置く\ncompose | 構成する、作曲する | com=共に + pose=置く\noppose | 反対する | op=向かって + pose=置く\npurpose | 目的 | pur=前に + pose=置く\n# ply=折る\napply | 申し込む、適用する | ap=〜へ + ply=折る\nreply | 返事する | re=戻す + ply=折る\nimply | 暗示する | im=中に + ply=折る\nemploy | 雇う | em=中に + ploy=折る\ncomplicate | 複雑にする | com=共に + plic=折る + ate=する\nexplicit | 明白な | ex=外へ + plic=折る + it\n# tract=引く\nattract | 引きつける | at=〜へ + tract=引く\nextract | 抽出する | ex=外へ + tract=引く\ncontract | 契約、縮む | con=共に + tract=引く\nsubtract | 引く | sub=下へ + tract=引く\ndistract | 気をそらす | dis=離れて + tract=引く\nabstract | 抽象的な | abs=離れて + tract=引く\n# ceed/cess=行く\nproceed | 進む | pro=前へ + ceed=行く\nsucceed | 成功する | suc=下から続いて + ceed=行く\nexceed | 超える | ex=外へ + ceed=行く\nprocess | 過程、処理する | pro=前へ + cess=行く\naccess | 接近、アクセス | ac=〜へ + cess=行く\n# gress/grad=歩む\nprogress | 進歩 | pro=前へ + gress=歩む\naggressive | 攻撃的な | ag=〜へ + gress=歩む + ive=性質\ncongress | 議会 | con=共に + gress=歩む\ngradual | 徐々の | grad=段階 + ual=の\ngraduate | 卒業する | grad=段階 + ate=する\ndegree | 度、学位 | de=下へ + gree=段階\n# form=形\nform | 形、形づくる | form=形\ninform | 知らせる | in=中へ + form=形\nperform | 実行する、演じる | per=完全に + form=形\nreform | 改革する | re=再び + form=形\ntransform | 変形させる | trans=越えて + form=形\nuniform | 制服、一様な | uni=1つ + form=形\nconform | 従う | con=共に + form=形\n# tend=伸ばす\nattend | 出席する | at=〜へ + tend=伸ばす\nextend | 広げる | ex=外へ + tend=伸ばす\nintend | 意図する | in=〜へ + tend=伸ばす\npretend | 〜のふりをする | pre=前に + tend=伸ばす\ntension | 緊張 | tens=伸ばす + ion=こと\ntendency | 傾向 | tend=向かう + ency=性質\n# fer=運ぶ\ntransfer | 移す | trans=越えて + fer=運ぶ\nrefer | 参照する | re=戻して + fer=運ぶ\nprefer | 〜の方を好む | pre=前に + fer=運ぶ\nsuffer | 苦しむ | suf=下で + fer=運ぶ\noffer | 提供する | of=〜へ + fer=運ぶ\ndiffer | 異なる | dif=離れて + fer=運ぶ\nconference | 会議 | con=共に + fer=運ぶ + ence=こと\n# pend=つるす\ndepend | 頼る | de=下に + pend=つるす\nsuspend | 一時停止する | sus=下に + pend=つるす\npending | 未決の | pend=つるす + ing=状態\nindependent | 独立した | in=否定 + de=下に + pend=つるす + ent=の\nexpense | 費用 | ex=外へ + pense=量る\ncompensate | 補償する | com=共に + pens=量る + ate=する\n# cur=走る\ncurrent | 現在の、流れ | cur=走る + ent=の\noccur | 起こる | oc=〜へ + cur=走る\ncourse | 進路、講座 | curs=走る\ncurrency | 通貨 | cur=走る + ency=性質\n# cap=つかむ\ncapture | 捕らえる | capt=つかむ + ure=こと\ncapable | 能力がある | cap=つかむ + able=できる\ncapacity | 容量、能力 | cap=つかむ + acity=性質\nparticipate | 参加する | part=部分 + cip=つかむ + ate=する\nanticipate | 予期する | anti=前もって + cip=つかむ + ate=する\noccupy | 占める | oc=〜に + cup=つかむ + y=する\n# scrib/script=書く\ndescribe | 描写する | de=下に + scribe=書く\ndescription | 説明 | de=下に + scrip=書く + tion=こと\nsubscribe | 購読する | sub=下に + scribe=書く\nprescribe | 処方する | pre=前に + scribe=書く\nscript | 台本 | script=書く\ntranscript | 写し、成績証明書 | trans=移して + script=書く\n# vis/vid=見る\nvision | 視力、展望 | vis=見る + ion=こと\nvisible | 目に見える | vis=見る + ible=できる\nevidence | 証拠 | e=外へ + vid=見る + ence=こと\nrevise | 見直す、改訂する | re=再び + vise=見る\nsupervise | 監督する | super=上から + vise=見る\nprovide | 提供する | pro=前もって + vide=見る\nadvise | 助言する | ad=〜へ + vise=見る\n# audi=聞く\naudience | 聴衆 | audi=聞く + ence=人々\naudio | 音声の | audi=聞く\naudible | 聞こえる | audi=聞く + ible=できる\nauditorium | 講堂 | audi=聞く + torium=場所\n# voc/voke=声、呼ぶ\nvocal | 声の | voc=声 + al=の\nadvocate | 主張する、擁護者 | ad=〜へ + voc=呼ぶ + ate=する\nprovoke | 挑発する | pro=前へ + voke=呼ぶ\nrevoke | 取り消す | re=戻して + voke=呼ぶ\nevoke | 呼び起こす | e=外へ + voke=呼ぶ\nvocation | 天職 | voc=呼ぶ + ation=こと\n# spir=息\ninspire | 鼓舞する | in=中に + spire=息\nexpire | 期限が切れる | ex=外へ + spire=息\naspire | 熱望する | a=〜へ + spire=息\nperspire | 汗をかく | per=通して + spire=息\nspirit | 精神 | spir=息\n# ped/pod=足\npedestrian | 歩行者 | ped=足 + estrian=人\npedal | ペダル | ped=足\nexpedition | 遠征 | ex=外へ + ped=足 + ition=こと\nimpede | 妨げる | im=中に + ped=足\ntripod | 三脚 | tri=3 + pod=足\n# manu=手\nmanual | 手動の、説明書 | manu=手 + al=の\nmanufacture | 製造する | manu=手 + fact=作る + ure=こと\nmanage | 管理する | man=手 + age=こと\n# fact/fect=作る\nfactory | 工場 | fact=作る + ory=場所\nfactor | 要因 | fact=作る + or=もの\neffect | 効果 | ef=外へ + fect=作る\naffect | 影響する | af=〜へ + fect=作る\nperfect | 完璧な | per=完全に + fect=作る\ndefect | 欠陥 | de=離れて + fect=作る\nsufficient | 十分な | suf=下から + fic=作る + ient=の\nbenefit | 利益 | bene=良い + fit=作る\nartificial | 人工の | arti=技術 + fic=作る + ial=の\n# log=言葉、学\ndialogue | 対話 | dia=通して + logue=言葉\napology | 謝罪 | apo=離れて + log=言葉 + y=こと\nlogic | 論理 | log=言葉 + ic=の\nbiology | 生物学 | bio=生命 + logy=学\ngeology | 地質学 | geo=地球 + logy=学\ntechnology | 科学技術 | techno=技術 + logy=学\npsychology | 心理学 | psycho=心 + logy=学\n# graph=書く\nphotograph | 写真 | photo=光 + graph=書く\nautograph | サイン | auto=自分 + graph=書く\nparagraph | 段落 | para=そばに + graph=書く\ngeography | 地理 | geo=地球 + graph=書く + y=こと\nbiography | 伝記 | bio=生命 + graph=書く + y=こと\ntelegraph | 電報 | tele=遠く + graph=書く\n# tele/micro=遠く、小さい\ntelephone | 電話 | tele=遠く + phone=音\ntelevision | テレビ | tele=遠く + vision=見ること\ntelescope | 望遠鏡 | tele=遠く + scope=見る\nmicroscope | 顕微鏡 | micro=小さい + scope=見る\nmicrophone | マイク | micro=小さい + phone=音\n# auto=自分\nautomatic | 自動の | auto=自分 + matic=動く\nautomobile | 自動車 | auto=自分 + mobile=動く\nautobiography | 自伝 | auto=自分 + bio=生命 + graph=書く + y=こと\n# mob/mot=動く\nmobile | 動かせる、携帯の | mob=動く + ile=できる\nmotion | 動き | mot=動く + ion=こと\nremove | 取り除く | re=後ろへ + move=動く\npromote | 促進する、昇進させる | pro=前へ + mote=動く\nemotion | 感情 | e=外へ + mot=動く + ion=こと\nmotivate | やる気にさせる | mot=動く + ivate=する\n# sens/sent=感じる\nsense | 感覚 | sens=感じる\nsensitive | 敏感な | sens=感じる + itive=性質\nsensible | 分別のある | sens=感じる + ible=できる\nconsent | 同意 | con=共に + sent=感じる\nsentiment | 感情 | sent=感じる + iment=こと\n# cred/fid=信じる\ncredit | 信用、単位 | cred=信じる + it\ncredible | 信頼できる | cred=信じる + ible=できる\nincredible | 信じられない | in=否定 + cred=信じる + ible=できる\nconfident | 自信のある | con=強めて + fid=信じる + ent=の\nconfidence | 自信 | con=強めて + fid=信じる + ence=こと\nconfide | 打ち明ける | con=強めて + fide=信じる\n# sign=印\nsignal | 信号 | sign=印 + al=もの\nsignature | 署名 | sign=印 + ature=こと\ndesign | 設計する | de=下に + sign=印\nassign | 割り当てる | as=〜へ + sign=印\nresign | 辞職する | re=戻して + sign=印\nsignificant | 重要な | sign=印 + ific=作る + ant=の\n# nat=生まれる\nnature | 自然 | nat=生まれる + ure=もの\nnative | 生まれつきの | nat=生まれる + ive=性質\nnation | 国家 | nat=生まれる + ion=こと\nnational | 国の | nat=生まれる + ion=こと + al=の\nnatural | 自然な | nat=生まれる + ural=の\n# viv/vit=生きる\nvital | 不可欠な | vit=生きる + al=の\nsurvive | 生き残る | sur=超えて + viv=生きる + e\nrevive | 蘇らせる | re=再び + viv=生きる + e\nvivid | 鮮やかな | viv=生きる + id=性質\nvitamin | ビタミン | vit=生命 + amin=アミン\n# mort=死\nmortal | 死ぬ運命の | mort=死 + al=の\nimmortal | 不死の | im=否定 + mort=死 + al=の\n# equ=等しい\nequal | 等しい | equ=等しい + al=の\nequator | 赤道 | equ=等しい + ator=もの\nequation | 方程式 | equ=等しい + ation=こと\nequivalent | 同等の | equ=等しい + val=価値 + ent=の\nadequate | 十分な | ad=〜へ + equ=等しい + ate=の\n# uni/bi/tri/multi=数\nunit | 単位 | uni=1つ + it\nunique | 唯一の | uni=1つ + que\nbicycle | 自転車 | bi=2 + cycle=輪\ntriangle | 三角形 | tri=3 + angle=角\ndecade | 10年 | dec=10 + ade=まとまり\ncentury | 世紀 | cent=100 + ury\nmultiple | 複数の | multi=多い + ple=折る\n# inter=間で\ninteract | 交流する | inter=間で + act=行う\ninternational | 国際的な | inter=間で + nation=国 + al=の\ninterview | 面接 | inter=間で + view=見る\ninterrupt | 遮る | inter=間で + rupt=破る\nintervene | 介入する | inter=間に + vene=来る\n# rupt=破る\nerupt | 噴火する | e=外へ + rupt=破る\ncorrupt | 腐敗した | cor=完全に + rupt=破る\ndisrupt | 混乱させる | dis=バラバラに + rupt=破る\nabrupt | 突然の | ab=離れて + rupt=破る\nbankrupt | 破産した | bank=銀行 + rupt=破る\n# dis=否定、離れて\ndisagree | 意見が合わない | dis=反対 + agree=同意する\ndisappear | 消える | dis=否定 + appear=現れる\ndiscover | 発見する | dis=取り去る + cover=覆う\ndisadvantage | 不利な点 | dis=否定 + advantage=有利";
+var BANK = (function () {
+  var out = [], grp = '';
+  BANK_RAW.split('\n').forEach(function (line) {
+    line = line.trim(); if (!line) return;
+    if (line.charAt(0) === '#') { grp = line.slice(1).trim(); return; }
+    var c = line.split('|').map(function (x) { return x.trim(); });
+    if (c.length < 2 || !c[0] || !c[1]) return;
+    out.push({ en: c[0], meaning: c[1], parts: c[2] || '', group: grp });
+  });
+  return out;
+})();
+function bkey(s) { return String(s).trim().toLowerCase(); }
+function bankSets() {
+  var have = {}, skip = {};
+  data.words.forEach(function (w) { have[bkey(w.en)] = 1; });
+  data.bank.done.forEach(function (k) { have[k] = 1; });
+  data.bank.skip.forEach(function (k) { skip[k] = 1; });
+  return { have: have, skip: skip };
+}
+function bankNext(n) {
+  var s = bankSets(), out = [];
+  for (var i = 0; i < BANK.length && out.length < n; i++) {
+    var k = bkey(BANK[i].en);
+    if (!s.have[k] && !s.skip[k]) out.push(BANK[i]);
+  }
+  return out;
+}
+function bankCounts() {
+  var s = bankSets(), have = 0, skip = 0, todo = 0;
+  BANK.forEach(function (b) { var k = bkey(b.en); if (s.have[k]) have++; else if (s.skip[k]) skip++; else todo++; });
+  return { have: have, skip: skip, todo: todo, total: BANK.length };
+}
+function bankRelease(count) {
+  var items = bankNext(count);
+  if (!items.length) { toast('追加できる単語がありません'); return; }
+  var t = todayStr();
+  items.slice().reverse().forEach(function (b) {
+    data.words.unshift({ id: uid(), en: b.en, meaning: b.meaning, parts: b.parts, date: t, box: 0, due: t });
+    data.bank.done.push(bkey(b.en));
+  });
+  var td = data.bank.today;
+  data.bank.today = td.d === t ? { d: t, n: td.n + items.length } : { d: t, n: items.length };
+  toast(items.length + '語を追加しました');
+  afterAdd();
+}
+function skipWord(b) {
+  var k = bkey(b.en);
+  if (data.bank.skip.indexOf(k) < 0) data.bank.skip.push(k);
+  save(); renderAll();
+  toast('「' + b.en + '」を単語庫から外しました', { label: '元に戻す', fn: function () {
+    data.bank.skip = data.bank.skip.filter(function (x) { return x !== k; }); save(); renderAll();
+  } });
+}
+function renderBank() {
+  var c = bankCounts(), t = todayStr(), per = data.bank.perDay;
+  var doneToday = data.bank.today.d === t ? data.bank.today.n : 0;
+  var box = $('#bankToday'); clear(box);
+  add(box, h('h2', null, '今日の新しい単語', h('span', { class: 'aside' }, '単語庫 ' + c.have + ' / ' + c.total + '語')));
+  if (!c.todo) add(box, h('p', { class: 'muted flush' }, '単語庫の ' + c.total + '語をすべて追加しました。'));
+  else {
+    var remaining = Math.max(0, per - doneToday), n = remaining > 0 ? remaining : per;
+    var next = bankNext(n), groups = [];
+    next.forEach(function (b) { if (groups.indexOf(b.group) < 0) groups.push(b.group); });
+    add(box, h('p', { class: 'grp flush' }, '語幹：' + groups.join('、')));
+    add(box, h('div', { class: 'chips' }, next.map(function (b) { return h('span', { class: 'chip', lang: 'en' }, b.en); })));
+    var due = dueWords().length;
+    if (due > 30) add(box, h('p', { class: 'small muted' }, '復習が' + due + '語たまっています。先に復習を進めるのがおすすめです。'));
+    add(box, h('div', { class: 'row' }, h('button', { class: 'btn' + (remaining > 0 ? ' primary' : ''), type: 'button', onclick: function () { bankRelease(n); } },
+      remaining > 0 ? '今日の分を追加（' + n + '語）' : 'さらに' + n + '語追加する')));
+    if (remaining === 0) add(box, h('p', { class: 'small muted' }, '今日の分（' + per + '語）は追加済みです。'));
+  }
+  $('#bankCount').textContent = c.have + ' / ' + c.total + '語';
+  $('#bankBarFill').style.width = Math.round((c.have + c.skip) / c.total * 100) + '%';
+  $('#bankNote').textContent = '追加済み ' + c.have + '語　外した語 ' + c.skip + '語　残り ' + c.todo + '語';
+  Array.prototype.forEach.call(document.querySelectorAll('#perDaySeg button'), function (b) { b.setAttribute('aria-pressed', String(+b.dataset.n === per)); });
+  var peek = $('#bankPeekList'); clear(peek);
+  var list = bankNext(40);
+  if (!list.length) add(peek, h('p', { class: 'muted small' }, '確認する単語はありません。'));
+  list.forEach(function (b) {
+    add(peek, h('div', { class: 'peek-row' },
+      h('div', null, h('div', { class: 'w-en', lang: 'en' }, b.en), h('div', { class: 'w-mean' }, b.meaning), b.parts ? h('div', { class: 'w-tiles' }, tiles(b, 'small')) : null),
+      h('div', { class: 'w-act' }, h('button', { class: 'btn quiet', type: 'button', 'aria-label': b.en + ' を知っているので外す', onclick: function () { skipWord(b); } }, '知ってる'))));
+  });
+  var rb = $('#btnBankRestore');
+  if (!rb.dataset.armed) { rb.textContent = '外した単語を戻す（' + data.bank.skip.length + '語）'; }
+  rb.disabled = !data.bank.skip.length;
+}
+$('#perDaySeg').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return;
+  data.bank.perDay = +b.dataset.n; save(); renderAll();
+});
+arm($('#btnBankRestore'), 'もう一度押すと、外した単語をすべて戻します', function () {
+  data.bank.skip = []; save(); renderAll(); toast('外した単語を戻しました');
+});
+
 /* ---------- Words ---------- */
 var editingId = null;
 function resetWordForm() {
@@ -801,7 +937,7 @@ function renderWords() {
   var list = data.words.filter(function (w) { return !q || (w.en + ' ' + w.meaning + ' ' + w.parts).toLowerCase().indexOf(q) >= 0; });
   $('#wordCount').textContent = q ? list.length + ' / ' + data.words.length + '語' : data.words.length + '語';
   var box = $('#wordList'); clear(box);
-  if (!data.words.length) { add(box, h('p', { class: 'muted' }, 'まだ単語がありません。上のフォームに1語入れてみましょう。')); return; }
+  if (!data.words.length) { add(box, h('p', { class: 'muted' }, 'まだ単語がありません。「今日」タブの「今日の分を追加」か、上のフォームから登録できます。')); return; }
   if (!list.length) { add(box, h('p', { class: 'muted' }, '「' + $('#wordSearch').value.trim() + '」に合う単語はありません。')); return; }
   list.forEach(function (w) {
     var idx = data.words.indexOf(w);
@@ -1069,7 +1205,7 @@ function exportFallback(txt, name) {
   } catch (e) { showBackupText(txt); }
 }
 $('#btnExport').addEventListener('click', function () {
-  var txt = JSON.stringify(data, null, 2), name = 'goken-english-backup-' + todayStr() + '.json';
+  var txt = JSON.stringify(data, null, 2), name = 'gokan-english-backup-' + todayStr() + '.json';
   if (!dl) { exportFallback(txt, name); return; }
   dl.save({ filename: name, data: txt }).then(function () { toast('バックアップを保存しました'); }).catch(function (err) {
     if (err && err.code === 'declined') return;
@@ -1102,7 +1238,7 @@ arm($('#btnReset'), 'もう一度押すと、すべて削除します', function
 
 /* ---------- render all ---------- */
 function renderAll() {
-  renderHeader(); renderToday(); renderWords();
+  renderHeader(); renderToday(); renderBank(); renderWords();
   if (rv.phase !== 'run') renderReview(); else if (currentTab === 'review') renderReview();
   if (ts.phase !== 'run') renderTest();
   if (currentTab === 'record') renderRecord();
